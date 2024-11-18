@@ -1,0 +1,221 @@
+---
+title: "Homework Assignment #4"
+subtitle: "Marine Aquaculture Suitability by EEZ Zone on West Coast of the U.S."
+author: "Nicole Pepper"
+date: last-modified
+execute: 
+  eval: true
+  warning: false
+  message: false
+format:
+  html:
+    toc: true 
+editor_options: 
+  chunk_output_type: console
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+#| code-fold: true
+#| code-summary: "Display Code"
+
+# ---- Load libraries ----
+# Load libraries
+library(terra)
+library(geodata)
+library(tidyverse)
+library(tmap)
+library(kableExtra)
+library(spData)
+library(spDataLarge)
+library(here)
+library(viridisLite) 
+library(terra)
+library(sf)
+library(purrr)
+library(stars)
+library(raster)
+library(dplyr)
+
+```
+
+Read in Project Data:
+
+```{r}
+#| code-fold: true
+#| code-summary: "Display Code"
+
+# ---- Read in Project Data ----
+
+# Create data folder object
+data_folder <- here::here("data")
+
+# Read in sea surface temperature (sst) data & make mean
+sst_list <- list.files(data_folder, pattern = "average_annual_sst_\\d{4}\\.tif$", full.names = TRUE)
+sst_stack <- lapply(sst_list, rast) %>% rast()
+
+# Read in depth data
+depth <- rast(here::here("data/depth.tif"))
+
+# Read in EEZ Zones
+eez_zones <- st_read(here::here("data/wc_regions_clean.shp"))
+
+```
+
+#### Create fancy reproject function for list of all data
+use `class()`to separate SpatRaster and sf
+
+#### Process Data
+```{r}
+
+# ---- Prepare SST Data ----
+
+# Calculate mean SST
+mean_sst <- mean(sst_stack)
+
+# Convert SST from Kelvin to Celsius
+mean_sst <- mean_sst - 273.15
+
+
+# ---- Check CRS of data ----
+
+# Create a warning if the data do not match
+if (crs(depth) != crs(mean_sst)) {
+  warning("The datasets do not have the same CRS.")
+} else {
+  message("All datasets are in the same CRS.")
+}
+
+# ---- Resample raster data to match resolution and extent ----
+
+# Transform CRS
+eez_zones <- st_transform(eez_zones, crs = crs(mean_sst)) 
+
+# Resample depth data to match the resolution of SST with nearest neighbor
+depth <- resample(depth, mean_sst, method = "near")
+
+# Crop the resampled depth data to the extent of SST data
+depth <- crop(depth, mean_sst, snap = "near")
+
+# ---- Reproject depth to match mean_sst data ----
+
+depth <- project(depth, crs(mean_sst))
+
+# Create a warning if the data do not match
+if (crs(depth) != crs(mean_sst)) {
+  warning("The datasets do not have the same CRS.")
+} else {
+  message("All datasets are in the same CRS.")
+}
+
+# ---- Resample raster data to match resolution and extent ----
+data_stack <- c(depth, mean_sst)
+names(data_stack) <- c("depth", "mean_sst")
+
+```
+
+
+Oyster Suitability Conditions:
+
+- sea surface temperature: 11-30°C
+
+- depth: 0-70 meters below sea level
+
+```{r}
+# Does this include/exclude things right?
+oy_sst <- matrix(c(-Inf, 11, 0,
+                11, 30, 1,
+                30, Inf, 0),
+              ncol = 3, byrow = TRUE)
+
+oy_depth <- matrix(c(-Inf, 0, 0,
+                0, 70, 1,
+                70, Inf, 0),
+              ncol = 3, byrow = TRUE)
+
+oy_sst_zone <- terra::classify(data_stack[["mean_sst"]], rcl = oy_sst)
+oy_depth_zone <- terra::classify(data_stack[["depth"]], rcl = oy_depth)
+
+oyster_suitable = oy_sst_zone * oy_depth_zone
+```
+
+
+```{r}
+custom_colors <- c("white", "red")
+
+# Plot the raster with custom colors
+plot(oyster_suitable, col = custom_colors)
+```
+
+Function arguments: `suitability_fun`
+
+- `minimum and maximum sea surface temperature`
+
+- `minimum and maximum depth`
+
+- `species name`
+```{r}
+sst_suitability <- function(raster_layer, sst_min, sst_max, species) {
+  if (species == "oyster") {
+    oy_sst <- matrix(c(-Inf, sst_min, 0,
+                sst_min, sst_max, 1,
+                sst_max, Inf, 0),
+              ncol = 3, byrow = TRUE)
+    
+    oy_sst_suitablility <- terra::classify(raster_layer[["mean_sst"]], rcl = oy_sst)
+    return(oy_sst_suitablility)
+  } else {
+    return(NULL)
+  }
+}
+
+```
+
+
+```{r}
+oyster_sst_suitability_zone <- oyster_suitability(data_stack, 11, 17, "oyster")
+```
+
+```{r}
+
+# Plot the raster with custom colors
+plot(oyster_sst_suitability_zone, col = custom_colors)
+```
+
+oy_depth <- matrix(c(-Inf, 0, 0,
+                0, 70, 1,
+                70, Inf, 0),
+              ncol = 3, byrow = TRUE)
+              
+```{r}
+habitat_suitability <- function(raster_layer, sst_min, sst_max, depth_min, depth_max, species) {
+  if (species == "oyster") {
+    oy_sst <- matrix(c(-Inf, sst_min, 0,
+                sst_min, sst_max, 1,
+                sst_max, Inf, 0),
+              ncol = 3, byrow = TRUE)
+    
+    oy_sst_suitability <- terra::classify(raster_layer[["mean_sst"]], rcl = oy_sst)
+
+    oy_depth <- matrix(c(-Inf, depth_min, 0,
+                depth_min, depth_max, 1,
+                depth_max, Inf, 0),
+              ncol = 3, byrow = TRUE)
+    
+    oy_depth_suitability <- terra::classify(raster_layer[["depth"]], rcl = oy_depth)
+    
+    oyster_suitability <- oy_sst_suitability * oy_depth_suitability
+    return(oyster_suitability)
+  } else {
+    return(NULL)
+  }
+}
+```
+
+```{r}
+suitable_oyster_habitat <- habitat_suitability(data_stack, 11, 17, 0, 70, "oyster")
+plot(suitable_oyster_habitat, col = custom_colors)
+```
+
