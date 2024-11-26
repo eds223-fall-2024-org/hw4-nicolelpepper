@@ -7,16 +7,18 @@ execute:
   eval: true
   warning: false
   message: false
+  results: "hide"
 format:
   html:
     toc: true 
+    code-fold: true
 editor_options: 
   chunk_output_type: console
 editor: 
   markdown: 
     wrap: 72
 ---
-
+#### Set up Workspace
 ```{r}
 #| code-fold: true
 #| code-summary: "Display Code"
@@ -38,11 +40,10 @@ library(purrr)
 library(stars)
 library(raster)
 library(dplyr)
-
+library(testthat)
 ```
 
-Read in Project Data:
-
+#### Read in Project Data:
 ```{r}
 #| code-fold: true
 #| code-summary: "Display Code"
@@ -53,8 +54,11 @@ Read in Project Data:
 data_folder <- here::here("data")
 
 # Read in sea surface temperature (sst) data & make mean
-sst_list <- list.files(data_folder, pattern = "average_annual_sst_\\d{4}\\.tif$", full.names = TRUE)
-sst_stack <- lapply(sst_list, rast) %>% rast()
+sst_list <- list.files(data_folder,
+                       pattern = "average_annual_sst_\\d{4}\\.tif$",
+                       full.names = TRUE)
+sst_stack <- lapply(sst_list, rast) %>%
+  rast()
 
 # Read in depth data
 depth <- rast(here::here("data/depth.tif"))
@@ -67,7 +71,7 @@ eez_zones <- st_read(here::here("data/wc_regions_clean.shp"))
 #### Create fancy reproject function for list of all data
 use `class()`to separate SpatRaster and sf
 
-#### Process Data
+#### Prepare Data
 ```{r}
 
 # ---- Prepare SST Data ----
@@ -101,6 +105,7 @@ depth <- crop(depth, mean_sst, snap = "near")
 
 # ---- Reproject depth to match mean_sst data ----
 
+# Reproject depth layer
 depth <- project(depth, crs(mean_sst))
 
 # Create a warning if the data do not match
@@ -110,7 +115,7 @@ if (crs(depth) != crs(mean_sst)) {
   message("All datasets are in the same CRS.")
 }
 
-# ---- Resample raster data to match resolution and extent ----
+# Stack data
 data_stack <- c(depth, mean_sst)
 names(data_stack) <- c("depth", "mean_sst")
 
@@ -156,26 +161,25 @@ Function arguments: `suitability_fun`
 - `minimum and maximum depth`
 
 - `species name`
+# ```{r}
+# sst_suitability <- function(raster_layer, sst_min, sst_max, species) {
+#   if (species == "oyster") {
+#     oy_sst <- matrix(c(-Inf, sst_min, 0,
+#                 sst_min, sst_max, 1,
+#                 sst_max, Inf, 0),
+#               ncol = 3, byrow = TRUE)
+#     
+#     oy_sst_suitablility <- terra::classify(raster_layer[["mean_sst"]], rcl = oy_sst)
+#     return(oy_sst_suitablility)
+#   } else {
+#     return(NULL)
+#   }
+# }
+# 
+# ```
+
 ```{r}
-sst_suitability <- function(raster_layer, sst_min, sst_max, species) {
-  if (species == "oyster") {
-    oy_sst <- matrix(c(-Inf, sst_min, 0,
-                sst_min, sst_max, 1,
-                sst_max, Inf, 0),
-              ncol = 3, byrow = TRUE)
-    
-    oy_sst_suitablility <- terra::classify(raster_layer[["mean_sst"]], rcl = oy_sst)
-    return(oy_sst_suitablility)
-  } else {
-    return(NULL)
-  }
-}
-
-```
-
-
-```{r}
-oyster_sst_suitability_zone <- oyster_suitability(data_stack, 11, 17, "oyster")
+oyster_sst_suitability_zone <- sst_suitability(data_stack, 11, 17, "oyster")
 ```
 
 ```{r}
@@ -208,14 +212,281 @@ habitat_suitability <- function(raster_layer, sst_min, sst_max, depth_min, depth
     
     oyster_suitability <- oy_sst_suitability * oy_depth_suitability
     return(oyster_suitability)
-  } else {
+  } 
+  
+else if (species == "giant kelp") {
+  sal_sst <- matrix(c(-Inf, sst_min, 0,
+                sst_min, sst_max, 1,
+                sst_max, Inf, 0),
+              ncol = 3, byrow = TRUE)
+    
+    sal_sst_suitability <- terra::classify(raster_layer[["mean_sst"]], rcl = sal_sst)
+
+    sal_depth <- matrix(c(-Inf, depth_min, 0,
+                depth_min, depth_max, 1,
+                depth_max, Inf, 0),
+              ncol = 3, byrow = TRUE)
+    
+    sal_depth_suitability <- terra::classify(raster_layer[["depth"]], rcl = sal_depth)
+    
+    sal_suitability <- sal_sst_suitability * sal_depth_suitability
+    return(sal_suitability)
+  
+}
+    
+  else {
     return(NULL)
   }
 }
 ```
 
+oy_sst <- matrix(c(-Inf, 11, 0,
+                11, 30, 1,
+                30, Inf, 0),
+              ncol = 3, byrow = TRUE)
+
+oy_depth <- matrix(c(-Inf, 0, 0,
+                0, 70, 1,
+                70, Inf, 0),
+              ncol = 3, byrow = TRUE)
+### Take 2
+# l apply
+
 ```{r}
-suitable_oyster_habitat <- habitat_suitability(data_stack, 11, 17, 0, 70, "oyster")
-plot(suitable_oyster_habitat, col = custom_colors)
+habitat_suitability_map <- function(species, min_sst, max_sst, min_depth, max_depth) {
+    # Assign suitable sst range
+    sst <- matrix(c(-Inf, min_sst, 0,
+                  min_sst, max_sst, 1,
+                  max_sst, Inf, 0),
+                ncol = 3, byrow = TRUE)
+    sst_suitability <- terra::classify(data_stack[["mean_sst"]], rcl = sst)
+
+    # Assign suitable depth range
+  depth <- matrix(c(-Inf, min_depth, 0,
+                        min_depth, max_depth, 1,
+                       max_depth, Inf, 0),
+                       ncol = 3, byrow = TRUE)
+    
+    depth_suitability <- terra::classify(data_stack[["depth"]], rcl = depth)
+
+     # Reclassify combined suitability to ensure binary (0 or 1)
+  binary_reclassification <- matrix(c(-Inf, 0, 0,  # Values < 0 become 0
+                                       0, Inf, 1), # Values >= 0 become 1
+                                     ncol = 3, byrow = TRUE)
+  
+    # Combine SST and depth suitability
+    species_suitability <- sst_suitability * depth_suitability
+    
+    return(
+  tm_shape(species_suitability) + 
+  tm_raster(palette = c("#07222B", "#E0D71B"),
+            labels = c("0 = Not Suitable", "1 = Suitable")) + 
+    tm_layout(main.title = paste(species, "Habitat Suitability"),
+              main.title.position = c("center", "top"),
+              legend.text.color = "white",
+              legend.position = c("bottom", "center"),
+              bg.color = "#00BFB2")
+)
+}
+
+```
+
+
+```{r}
+# ---- Create suitability function ----
+habitat_suitability_map <- function(species, min_sst, max_sst, min_depth, max_depth) {
+
+# ---- Assign suitable sst range ----
+    sst <- matrix(c(-Inf, min_sst, 0,
+                  min_sst, max_sst, 1,
+                  max_sst, Inf, 0),
+                ncol = 3, byrow = TRUE)
+    sst_suitability <- terra::classify(data_stack[["mean_sst"]],
+                                       rcl = sst,
+                                       include.lowest = TRUE)
+# ---- Assign suitable depth range ----
+    # Assign suitable depth range
+  depth <- matrix(c(-Inf, min_depth, 0,
+                        min_depth, max_depth, 1,
+                       max_depth, Inf, 0),
+                       ncol = 3, byrow = TRUE)
+    
+    depth_suitability <- terra::classify(data_stack[["depth"]],
+                                         rcl = depth,
+                                         include.lowest = TRUE)
+
+# ---- Combine suitability ----
+    # Combine SST and depth suitability
+    species_suitability <- sst_suitability * depth_suitability
+    
+   # Separate unsuitable area, reclassify 1 to NA
+   species_unsuitable <- species_suitability
+   species_unsuitable[species_unsuitable == 1] <- NA 
+   
+   # Separate unsuitable area, reclassify 0 to NA
+   species_suitability[species_suitability == 0] <- NA
+
+    
+
+# ---- Calculate Suitable Area By EEZ Zones ----
+
+# Create a raster where each cell is it's size (will be used to summarize area)
+    #suitable_eez
+cell_area <- cellSize(species_suitability, unit = 'km', transform = TRUE)
+
+# Rasterize eez data by rgn field based on species_suitability resolution and extent
+eez_raster <- rasterize(eez_zones, species_suitability, field= 'rgn')
+
+# Mask the eez_raster to the species_suitability area
+eez_suitability <-  mask(eez_raster, species_suitability)
+
+# Calculate the area.
+eez_suitability_area <- zonal(cell_area, eez_suitability, fun = 'sum')
+
+eez_suitability_area_calc <- left_join(eez_zones, eez_suitability_area, by = 'rgn') %>% 
+  mutate(eez_suitability_area = area,
+         percentage = (eez_suitability_area / area_km2) * 100,
+         .before = geometry)
+
+eez_suitable_rating <- data.frame(region = eez_suitability_area_calc$rgn, percent_suitable = eez_suitability_area_calc$percentage)
+
+
+# ---- Create suitability map ----
+eez_suitability_area_calc$rgn_label <- gsub(" ", "\n", eez_suitability_area_calc$rgn)
+
+return(
+
+  tm_shape(species_unsuitable) + 
+    tm_raster(palette = "#3D6399") +
+  
+  tm_shape(eez_suitability_area_calc) +
+    tm_fill(col = "percentage",
+            palette = c("#B2EFEF", "#6BCFC8", "#00BFB2", "#008F8A", "#004A45"),
+            title = "Suitability Percentage",
+            style = "cont",
+            border.alpha = 0.8) +
+# add labels
+tm_shape(eez_suitability_area_calc) +  
+  tm_text("rgn_label",
+          size = 0.6,
+          col = "white",
+          shadow = TRUE,
+          fontface = "bold") + 
+    
+     tm_shape(species_suitability) +
+    tm_raster(palette = "#E0D71B",
+              labels = "Suitable Area",
+              title = '') + 
+  
+  tm_layout(main.title = paste(species, "Habitat Suitability"),
+            main.title.position = c("center", "top"),
+            legend.text.color = "white",
+            legend.position = c(0.05,0.01),
+            bg.color = '#07222B')
+
+)
+}
+
+```
+
+("#B2EFEF", "#6BCFC8", "#00BFB2", "#008F8A", "#004A45")
+
+Kelp:
+min sst: 10
+max sst: 20
+min depth: 0
+max depth: 40
+
+
+Oyster: 
+min sst: 11
+max sst: 30
+min depth: 0
+max depth: 70
+
+
+```{r}
+habitat_suitability_map("Oyster", 11,30,-70,0)
+
+#plot(suitable_kelp_habitat, col = custom_colors)
+#plot(eez_zones, add = TRUE, border = "black", lwd = 2)
+```
+
+```{r}
+habitat_suitability_map("Kelp", 10,20,-40,0)
+```
+
+vOyster: 
+min sst: 11
+max sst: 30
+min depth: 0
+max depth: 70
+
+```{r}
+# ---- Assign suitable sst range ----
+    sst <- matrix(c(-Inf, 11, 0,
+                  11, 30, 1,
+                  30, Inf, 0),
+                ncol = 3, byrow = TRUE)
+    sst_suitability <- terra::classify(data_stack[["mean_sst"]],
+                                       rcl = sst,
+                                       include.lowest = TRUE)
+# ---- Assign suitable depth range ----
+    # Assign suitable depth range
+  depth <- matrix(c(-Inf, -70, 0,
+                        -70, 0, 1,
+                       0, Inf, 0),
+                       ncol = 3, byrow = TRUE)
+    
+    depth_suitability <- terra::classify(data_stack[["depth"]],
+                                         rcl = depth,
+                                         include.lowest = TRUE)
+
+# ---- Combine suitability ----
+    # Combine SST and depth suitability
+    species_suitability <- sst_suitability * depth_suitability
+    
+
+# ---- Calculate Suitable Area By EEZ Zones ----
+
+# Calculate area
+suitable_eez <- cellSize(species_suitability, unit = 'km', transform = TRUE)
+
+
+# Rasterize eez data by rgn field
+eez_raster<- rasterize(eez_zones, species_suitability, field= 'rgn')
+eez_suitability <-  mask(eez_raster, species_suitability)
+
+#calculate the area.
+eez_suitability_area <- zonal(suitable_eez, eez_suitability, fun = 'sum')
+
+eez_suitability_area_calc <- left_join(eez_zones, eez_suitability_area, by = 'rgn') %>% 
+  mutate(eez_suitability_area = area,
+         percentage = (eez_suitability_area / area_km2) * 100,
+         .before = geometry)
+
+eez_suitable_rating <- data.frame(region = eez_suitability_area_calc$rgn, percent_suitable = eez_suitability_area_calc$percentage)
+
+
+# ---- Create suitability map ----
+    return(
+  tm_shape(species_suitability) + 
+  tm_raster(palette = c("#07222B", "#E0D71B"),
+            labels = c("0 = Not Suitable", "1 = Suitable"),
+            title = '') + 
+    
+  tm_shape(eez_suitability_area_calc) +
+    tm_fill(col = "percentage",
+            palette = "-RdYlGn",  # Reverse the color palette for better visibility
+            title = "Suitability Percentage",
+            style = "cont",
+            border.alpha = 0.5) +
+    
+    tm_layout(main.title = paste("Oyster", "Habitat Suitability"),
+              main.title.position = c("center", "top"),
+              legend.text.color = "white",
+              legend.position = c("center", "bottom"),
+              bg.color = "#00BFB2")
+)
 ```
 
